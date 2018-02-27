@@ -95,6 +95,8 @@ class WiFiManager
     //sets timeout for which to attempt connecting, useful if you get a lot of failed connects
     void          setConnectTimeout(unsigned long seconds);
 
+    // choose where debug output goes (the default is Serial)
+    void          setDebugStream(Stream& dbg_stream);
 
     void          setDebugOutput(boolean debug);
     //defaults to not showing anything under 8% signal quality if called
@@ -137,7 +139,7 @@ class WiFiManager
     unsigned long _configPortalTimeout    = 0;
     unsigned long _connectTimeout         = 0;
     unsigned long _configPortalStart      = 0;
-
+    Stream&       _dbg_stream;
     IPAddress     _ap_static_ip;
     IPAddress     _ap_static_gw;
     IPAddress     _ap_static_sn;
