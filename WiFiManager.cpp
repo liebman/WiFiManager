@@ -207,8 +207,6 @@ boolean WiFiManager::autoConnect(char const *apName, char const *apPassword) {
   // so we must force it on else, if not connectimeout then waitforconnectionresult gets stuck endless loop
   WiFi_autoReconnect();
 
-  getMenuOut();
-
   // set hostname before stating
   if((String)_hostname != ""){
     DEBUG_WM(DEBUG_VERBOSE,"Setting hostname:",_hostname);
@@ -247,7 +245,8 @@ boolean WiFiManager::autoConnect(char const *apName, char const *apPassword) {
   // @note @todo ESP32 has no autoconnect, so connectwifi will always be called unless user called begin etc before
   if (WiFi.status() == WL_CONNECTED || connectWifi("", "") == WL_CONNECTED)   {
     //connected
-    DEBUG_WM(F("IP Address:"),WiFi.localIP());
+    DEBUG_WM(F("AutoConnect: SUCCESS"));
+    DEBUG_WM(F("STA IP Address:"),WiFi.localIP());
     _lastconxresult = WL_CONNECTED;
 
     if((String)_hostname != ""){
@@ -264,6 +263,8 @@ boolean WiFiManager::autoConnect(char const *apName, char const *apPassword) {
   if (!_enableConfigPortal) {
     return false;
   }
+
+  DEBUG_WM(F("AutoConnect: FAILED"));
 
   // not connected start configportal
   return startConfigPortal(apName, apPassword);
@@ -607,13 +608,18 @@ uint8_t WiFiManager::connectWifi(String ssid, String pass) {
   //@todo catch failures in set_config
   
   // make sure sta is on before `begin` so it does not call enablesta->mode while persistent is ON ( which would save WM AP state to eeprom !)
-  WiFi_Disconnect(); // disconnect before begin, in case anything is hung
+  WiFi_Disconnect(); // disconnect before begin, in case anything is hung, this causes a 2 seconds delay for connect
 
   // if ssid argument provided connect to that
   if (ssid != "") {
     wifiConnectNew(ssid,pass);
-    connRes = waitForConnectResult(_saveTimeout);    
-  } 
+    if(_saveTimeout > 0){
+      connRes = waitForConnectResult(_saveTimeout); // use default save timeout for saves to prevent bugs in esp->waitforconnectresult loop
+    }  
+    else {
+       connRes = waitForConnectResult(0);
+    }
+  }
   else {
     // connect using saved ssid if there is one
     if (WiFi_hasAutoConnect()) {
@@ -724,6 +730,7 @@ void WiFiManager::updateConxResult(uint8_t status){
 
  
 uint8_t WiFiManager::waitForConnectResult() {
+  if(_connectTimeout > 0) DEBUG_WM(DEBUG_VERBOSE,_connectTimeout,F("ms connectTimeout set")); 
   return waitForConnectResult(_connectTimeout);
 }
 
@@ -739,7 +746,7 @@ uint8_t WiFiManager::waitForConnectResult(uint16_t timeout) {
   }
 
   unsigned long timeoutmillis = millis() + timeout;
-  DEBUG_WM(DEBUG_NOTIFY,timeout,F("ms connectTimeout set, waiting for connect...."));
+  DEBUG_WM(DEBUG_VERBOSE,timeout,F("ms timeout, waiting for connect..."));
   uint8_t status = WiFi.status();
   
   while(millis() < timeoutmillis) {
@@ -873,7 +880,7 @@ void WiFiManager::handleParam(){
 String WiFiManager::getMenuOut(){
   String page;  
 
-  for(auto& menuId :_menuIds ){
+  for(auto menuId :_menuIds ){
     if(((String)menuId == "param") && (_paramsCount == 0)) continue; // no params set, omit params
     page += HTTP_PORTAL_MENU[menuId];
   }
@@ -1738,6 +1745,15 @@ void WiFiManager::setConnectTimeout(unsigned long seconds) {
 }
 
 /**
+ * [setConnectTimeout description
+ * @access public
+ * @param {[type]} unsigned long seconds [description]
+ */
+void WiFiManager::setSaveConnectTimeout(unsigned long seconds) {
+  _saveTimeout = seconds * 1000;
+}
+
+/**
  * [setDebugOutput description]
  * @access public
  * @param {[type]} boolean debug [description]
@@ -1987,11 +2003,15 @@ void WiFiManager::setShowInfoErase(boolean enabled){
 
 /**
  * set menu items and order
- * if param is present, it will be removed from wifi
+ * if param is present in menu , params will be removed from wifi page automatically
+ * eg.
+ *  const char * menu[] = {"wifi","setup","sep","info","exit"};
+ *  WiFiManager.setMenu(menu);
  * @since $dev
  * @param uint8_t menu[] array of menu ids
  */
 void WiFiManager::setMenu(const char * menu[], uint8_t size){
+  // DEBUG_WM(DEBUG_VERBOSE,"setmenu array");
   _menuIds.clear();
   for(size_t i = 0; i < size; i++){
     for(size_t j = 0; j < _nummenutokens; j++){
@@ -2001,10 +2021,20 @@ void WiFiManager::setMenu(const char * menu[], uint8_t size){
       }
     }
   }
-  // DEBUG_WM(getMenuOut());  
+  // DEBUG_WM(getMenuOut());
 }
 
+/**
+ * setMenu with vector
+ * eg.
+ * std::vector<const char *> menu = {"wifi","setup","sep","info","exit"};
+ * WiFiManager.setMenu(menu);
+ * tokens can be found in _menutokens array in strings_en.h
+ * @shiftIncrement $dev
+ * @param {[type]} std::vector<const char *>& menu [description]
+ */
 void WiFiManager::setMenu(std::vector<const char *>& menu){
+  // DEBUG_WM(DEBUG_VERBOSE,"setmenu vector");
   _menuIds.clear();
   for(auto menuitem : menu ){
     for(size_t j = 0; j < _nummenutokens; j++){
@@ -2074,22 +2104,20 @@ void WiFiManager::DEBUG_WM(Generic text,Genericb textb) {
 
 template <typename Generic, typename Genericb>
 void WiFiManager::DEBUG_WM(wm_debuglevel_t level,Generic text,Genericb textb) {
-  if(_debugLevel < level) return;
+  if(!_debug || _debugLevel < level) return;
 
-  if (_debug) {
-    if(_debugLevel >= DEBUG_MAX){
-      _debugPort.print("MEM: ");
-      _debugPort.println((String)ESP.getFreeHeap());
-    }
-    _debugPort.print("*WM: ");
-    if(_debugLevel == DEBUG_DEV) _debugPort.print("["+(String)level+"] ");
-    _debugPort.print(text);
-    if(textb){
-      _debugPort.print(" ");
-      _debugPort.print(textb);
-    }
-    _debugPort.print("\n");
+  if(_debugLevel >= DEBUG_MAX){
+    _debugPort.print("MEM: ");
+    _debugPort.println((String)ESP.getFreeHeap());
   }
+  _debugPort.print("*WM: ");
+  if(_debugLevel == DEBUG_DEV) _debugPort.print("["+(String)level+"] ");
+  _debugPort.print(text);
+  if(textb){
+    _debugPort.print(" ");
+    _debugPort.print(textb);
+  }
+  _debugPort.print("\n");
 }
 
 
